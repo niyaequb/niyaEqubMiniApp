@@ -1,0 +1,39 @@
+{
+  "name": "Niya Umrah Equb",
+  "short_name": "Niya Equb",
+  "description": "Save together. Take turns. Manage your Equb groups, contributions and draws, with prayer times, Qur'an and Qibla built in.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "prefer_related_applications": false,
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["finance", "lifestyle"],
+  "icons": [
+    {
+      "src": "icons/Icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/Icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

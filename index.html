@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    THE HOST ELEMENT IS THE WHOLE TRICK IN THIS FILE.
+
+    The mobile app is portrait-locked and laid out with flutter_screenutil,
+    which scales every dimension by (viewport width / design width). On a phone
+    that ratio is near 1. If Flutter fills a 1920px desktop browser it becomes
+    ~5, and every widget renders five times too large.
+
+    Wrapping the widget tree in a ConstrainedBox does NOT fix this:
+    flutter_screenutil reads its size from the FlutterView, not from widget
+    constraints or MediaQuery, so a box inside the app is invisible to it.
+
+    So the constraint is applied OUTSIDE Flutter. #app-frame is capped at
+    460px, Flutter renders into it via hostElement (see flutter_bootstrap.js),
+    and the FlutterView itself is therefore phone-sized. screenutil,
+    MediaQuery, Scaffold and SafeArea then all behave exactly as on a handset,
+    with no Dart changes.
+
+    On a real phone browser the 460px cap never binds, so the app fills the
+    screen.
+
+    THE HOST ELEMENT MUST HAVE A REAL SIZE, IN EVERY BROWSER THIS RUNS IN.
+
+    Everything above depends on #app-frame measuring correctly, because Flutter
+    takes the FlutterView's size straight from its bounding rect. Give it a
+    zero or wrong height and the whole layout goes with it: screenutil's `.h`
+    scale, MediaQuery.size, SafeArea, every Scaffold.
+
+    That is not a hypothetical. This page also runs inside the Dashen SuperApp's
+    WebView, which is not the same engine as the browser next to it - it can be
+    an older Chromium, it may not honour the viewport meta tag, and it may not
+    know newer CSS units. The sizing below is therefore written to survive that:
+    see #app-shell.
+  -->
+  <base href="/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Niya Umrah Equb — save together, take turns.">
+
+  <!--
+    user-scalable=no and maximum-scale=1 stop iOS Safari zooming the page when
+    a text field is focused. Without it, tapping the phone-number field jumps
+    the layout and the user has to pinch back out.
+
+    viewport-fit=cover lets the frame extend under the notch, which is what
+    makes SafeArea in the Dart code meaningful.
+
+    A host WebView is free to ignore all of this, which is why nothing about
+    the layout is allowed to depend on it.
+  -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Niya Equb">
+  <meta name="theme-color" content="#FFFFFF">
+
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="manifest" href="manifest.json">
+
+  <title>Niya Umrah Equb</title>
+
+  <!--
+    NOTHING THIS APP NEEDS IS FETCHED FROM ANOTHER ORIGIN. THAT IS DELIBERATE.
+
+    There used to be two preconnects to Google's font CDN here, because
+    google_fonts downloads its families at runtime and CanvasKit was being
+    pulled from gstatic. Both are gone:
+
+      * the text fonts are bundled - see `fonts/` and the `fonts:` section of
+        pubspec.yaml - and google_fonts has runtime fetching switched off in
+        main.dart;
+      * CanvasKit is served from this origin - see flutter_bootstrap.js.
+
+    Preconnecting warms a connection this build never opens, so the hints were
+    removed with the dependency. If either ever comes back, so should they.
+
+    Why it mattered: inside the Dashen SuperApp those requests do not arrive.
+    The engine renders text with whatever fonts are registered, and with none
+    registered it lays every string out at the right width and draws no glyphs
+    at all - so icons appeared, buttons and labels and input text did not, and
+    the screen looked like a broken stylesheet rather than a missing download.
+  -->
+
+  <!--
+    fluttertoast needs these on web and only on web.
+
+    On Android it calls the native Toast API and on iOS it draws its own view,
+    so the mobile project never had to think about it. The web implementation
+    is a thin Dart wrapper around Toastify, a JavaScript library the package
+    ships as an asset but does not inject.
+
+    Without these two lines every Fluttertoast.showToast call fails silently —
+    no error, no toast. That covers most of the app's inline feedback: failed
+    logins, validation messages, "payment received".
+  -->
+  <link rel="stylesheet" type="text/css"
+        href="assets/packages/fluttertoast/assets/toastify.css">
+  <script src="assets/packages/fluttertoast/assets/toastify.js" defer></script>
+
+  <style>
+    :root {
+      /* One place to change the frame width. Much above 480 starts to look
+         like a stretched phone rather than an app. */
+      --app-max-width: 460px;
+      --page-bg: #101114;
+      --app-bg: #FFFFFF;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;          /* the app scrolls, the page never does */
+      background: var(--page-bg);
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+      /* Android WebViews can run a "text autosizing" layout algorithm that
+         inflates font sizes on pages it decides are desktop-width. It cannot
+         touch Flutter's canvas, but it can and does resize the boot messages
+         below, which is how a loading screen ends up looking broken. */
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+      /* No rubber-banding or pull-to-refresh behind the app. In a host WebView
+         that gesture belongs to the host, not to us. */
+      overscroll-behavior: none;
+    }
+
+    /*
+      SIZED BY position:fixed, NOT BY A VIEWPORT UNIT.
+
+      This used to be `height: 100dvh`. dvh is the right unit on a phone browser
+      - it tracks the visible height as the address bar collapses, where 100vh
+      is stuck at the taller state and cuts the bottom off - but it is also a
+      recent unit, and a WebView that does not know it simply DROPS the
+      declaration. The shell then has no height, #app-frame's `height: 100%`
+      resolves against nothing, and Flutter is handed a host element whose
+      measured size bears no relation to the screen.
+
+      `position: fixed; inset: 0` needs no unit support at all: it sizes to the
+      viewport in every engine going back years, it is immune to the document
+      growing, and it cannot be knocked out by a host stylesheet the way a
+      single unsupported declaration can. The JS below is the last resort for
+      an engine that gets even this wrong.
+    */
+    #app-shell {
+      position: fixed;
+      inset: 0;
+      /* Long-hand, for engines that never learned `inset`. */
+      top: 0; right: 0; bottom: 0; left: 0;
+      display: flex;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #app-frame {
+      position: relative;
+      width: 100%;
+      max-width: var(--app-max-width);
+      height: 100%;
+      background: var(--app-bg);
+      overflow: hidden;
+    }
+
+    /* Desktop only: give the frame an edge so it reads as a device rather than
+       a mis-sized website. Suppressed below the breakpoint so a real phone
+       gets a genuinely full-bleed app. */
+    @media (min-width: 520px) {
+      #app-frame {
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.07),
+                    0 24px 70px rgba(0,0,0,0.55);
+      }
+    }
+
+    /*
+      BOOT SPLASH
+
+      Covers the gap between the page loading and Flutter's first paint — which
+      on web is long, because several megabytes of CanvasKit and app code have
+      to arrive first. Without it the user stares at an empty rectangle and
+      assumes the page is broken.
+
+      Rewritten from the first version, which had a bug worth recording: it was
+      absolutely positioned INSIDE #app-shell with its own max-width and auto
+      margins, so it did not line up with #app-frame and left a white column
+      down one side. It is now position:fixed over the whole viewport, with an
+      inner card that reuses the exact same --app-max-width, so it is
+      guaranteed to sit exactly where the app will appear.
+
+      It is also a SIBLING of #app-frame, not a child: Flutter takes ownership
+      of its host element's contents, so a splash placed inside would be
+      removed at an unpredictable moment rather than when we choose.
+    */
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      top: 0; right: 0; bottom: 0; left: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      background: var(--page-bg);
+      /* 180ms, down from 300ms. Long enough to read as a fade rather than a
+         cut, short enough that it is not felt as waiting. The JS removal
+         timer uses the same figure. */
+      transition: opacity 180ms ease;
+    }
+
+    #boot-splash.gone {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* The white "phone" the logo sits on. Same width rule as #app-frame, so
+       the handover to Flutter is invisible. */
+    #boot-splash .card {
+      width: 100%;
+      max-width: var(--app-max-width);
+      height: 100%;
+      background: var(--app-bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #boot-splash img {
+      width: 72%;
+      max-width: 300px;
+      /* Same 1.00 -> 1.03 pulse as the Dart SplashScreen, so the handover from
+         this to Flutter's own splash is not visible as a change in motion. */
+      animation: breathe 2800ms ease-in-out infinite;
+    }
+
+    @keyframes breathe {
+      0%, 100% { transform: scale(1.00); }
+      50%      { transform: scale(1.03); }
+    }
+
+    /*
+      TWO MESSAGES, NOT ONE.
+
+      #boot-note is patience — "still going, the connection is slow". It is grey
+      and it makes no claim about anything being wrong.
+
+      #boot-error is a verdict, and it is only ever shown once waiting has
+      genuinely stopped being the explanation. Saying "this did not load" over
+      an app that is still downloading is worse than saying nothing: the user
+      refreshes, throws away a part-finished download, and starts again.
+    */
+    #boot-note,
+    #boot-error {
+      display: none;
+      max-width: 320px;
+      margin-top: 22px;
+      padding: 0 24px;
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      word-break: break-word;
+    }
+
+    #boot-note  { color: #6B7280; }
+    #boot-error { color: #B01F2E; }
+
+    #boot-retry {
+      display: none;
+      margin-top: 14px;
+      padding: 9px 22px;
+      font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #111;
+      background: #E9B10A;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="app-shell">
+    <div id="app-frame"></div>
+  </div>
+
+  <div id="boot-splash">
+    <div class="card">
+      <img src="assets/assets/images/Loading.png" alt="Niya Umrah Equb">
+      <div id="boot-note"></div>
+      <div id="boot-error"></div>
+      <button id="boot-retry" type="button">Try again</button>
+    </div>
+  </div>
+
+  <!--
+    DASHEN SUPERAPP SIMULATOR — development and UAT only.
+
+    A payment is authorised inside the Dashen SuperApp, over an object the
+    SuperApp injects into this page. Outside it there is nothing to call, so
+    the payment screen correctly reports the bank as unreachable and the
+    integration cannot be exercised even once before Dashen have loaded the
+    mini app into their host.
+
+    This script stands in for that host so the whole path can be run and
+    checked here: it accepts the same messages, validates the signed order the
+    way the bank's server would — including recomputing the confirmpayload HMAC
+    from the bytes that actually arrived — and answers on the same callbacks.
+
+    It is inert unless it is wanted. It installs only on localhost or with
+    ?dashen-sim=1, never replaces a real dashenbanksuperapp, refuses any order
+    whose stage is not "uat", and is deleted from the published build by
+    deploy.ps1. Loaded synchronously and before the bootstrap so it is in place
+    whenever Flutter first reaches for the bridge.
+
+    See DASHEN_TESTING.md.
+  -->
+
+  <!--
+    flutter_bootstrap.js is normally generated by the Flutter tool. This
+    project ships its own template so it can pass hostElement — see the comment
+    at the top of this file for why that is load-bearing.
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
