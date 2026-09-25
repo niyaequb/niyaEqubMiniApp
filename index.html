@@ -105,7 +105,7 @@
     first request the app makes does not also pay for DNS, TCP and TLS.
   -->
   <link rel="preconnect" href="https://cms.niya-et.com" crossorigin>
-  <link rel="preload" href="main.dart.js" as="script">
+  <link rel="preload" href="main.dart.js?v=f5542b530039" as="script">
   <link rel="preload" href="assets/FontManifest.json" as="fetch" crossorigin="anonymous">
   <link rel="preload" href="assets/fonts/Inter-Regular.ttf" as="fetch" crossorigin="anonymous">
   <link rel="preload" href="assets/fonts/Inter-Medium.ttf" as="fetch" crossorigin="anonymous">
@@ -386,6 +386,16 @@
       color: #9CA3AF;
     }
 
+    /* Only ever shown when the display mode is not the default, or while it
+       is being changed - see "Display mode" in the script below. */
+    #boot-mode {
+      display: none;
+      margin-top: 10px;
+      font: 11px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #6B7280;
+      text-align: center;
+    }
+
     #boot-retry {
       display: none;
       margin-top: 16px;
@@ -411,6 +421,7 @@
            fetchpriority="high" decoding="async">
       <div id="boot-status" role="status" aria-live="polite">
         <div id="boot-bar"><div id="boot-bar-fill"></div></div>
+        <div id="boot-mode"></div>
         <div id="boot-note"></div>
         <div id="boot-error"></div>
         <div id="boot-detail"></div>
@@ -449,6 +460,7 @@
       var errorBox = doc.getElementById('boot-error');
       var detail = doc.getElementById('boot-detail');
       var retry = doc.getElementById('boot-retry');
+      var modeBox = doc.getElementById('boot-mode');
 
       // --- Language ---------------------------------------------------------
       //
@@ -489,6 +501,292 @@
       var text = TEXT[lang];
       retry.textContent = text.retry;
       retry.onclick = function () { window.location.reload(); };
+
+      // --- Display mode -----------------------------------------------------
+      //
+      // Flutter draws the whole app itself, through the phone's graphics chip
+      // (WebGL). That is fast, and it is also the one part of the page that
+      // depends on the phone's graphics driver and WebView version, which is
+      // why the same build can look perfect on one phone and half-drawn on
+      // another: text and parts of screens simply missing, while other mini
+      // apps - ordinary web pages drawn by the WebView itself - look fine.
+      //
+      // So the way Flutter draws is switchable:
+      //
+      //   auto    Flutter's default: one hidden WebGL canvas, frames copied
+      //           onto the page.
+      //   direct  WebGL drawing straight onto the page's own canvas - the
+      //           older path, and the one Safari and Firefox always use.
+      //   cpu     no graphics chip at all: Skia draws in software. Slower to
+      //           scroll, immune to graphics-driver bugs.
+      //   safe    cpu, plus the CanvasKit build that brings its own text
+      //           segmentation instead of relying on the WebView's.
+      //
+      // The mode comes from ?render=<mode> in the address (kept for next
+      // time), otherwise from what this phone used last - until its WebView
+      // updates, if the page chose it by itself - otherwise auto.
+      //
+      // Two ways it changes:
+      //
+      //   * Automatically. Before the first screen, main.dart draws a line of
+      //     text into a hidden image and checks that pixels came out. If none
+      //     did, the page first fetches fresh copies of the app's files (an
+      //     old font list kept by the phone draws no text either) and reloads;
+      //     if text still does not draw, it moves to cpu, then safe. At most
+      //     three steps in ten minutes.
+      //   * By hand, for support: tap the logo on this screen five times
+      //     quickly. The mode moves on to the next one, the phone's details
+      //     are shown for a screenshot, fresh copies of the files are fetched,
+      //     and the page reloads.
+      var MODES = ['auto', 'direct', 'cpu', 'safe'];
+      var MODE_NAMES = { auto: 'Automatic', direct: 'Direct GPU', cpu: 'Software (CPU)', safe: 'Safe (CPU, full text engine)' };
+      var MODE_KEY = 'niya.render';
+      var CHECKED_KEY = 'niya.render.checked';
+      var SWITCHES_KEY = 'niya.render.switches';
+      var REFRESHED_KEY = 'niya.render.refreshed';
+      var MODE_UA_KEY = 'niya.render.ua';
+      var UA = String(navigator.userAgent || '').slice(0, 240);
+
+      // Set by the automatic steps and the logo taps below; reveal() keeps
+      // this screen up until then.
+      var holdUntil = 0;
+
+      function readStore(key) {
+        try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
+      }
+      function writeStore(key, value) {
+        try {
+          if (!window.localStorage) return;
+          if (value === null) window.localStorage.removeItem(key);
+          else window.localStorage.setItem(key, value);
+        } catch (e) { /* storage blocked: the mode just does not persist */ }
+      }
+
+      var mode = 'auto';
+      var modeFromUrl = (window.location.search.match(/[?&]render=([a-z]+)/) || [])[1];
+      if (modeFromUrl && MODES.indexOf(modeFromUrl) >= 0) {
+        mode = modeFromUrl;
+        writeStore(MODE_KEY, mode === 'auto' ? null : mode);
+        writeStore(MODE_UA_KEY, null);
+      } else {
+        var savedMode = readStore(MODE_KEY);
+        if (savedMode && MODES.indexOf(savedMode) >= 0) mode = savedMode;
+        // A mode the page chose by itself is kept only for the WebView it
+        // was chosen on: an update may well have fixed what forced it, and
+        // the default is faster. One chosen by hand or by address is kept.
+        var chosenOn = readStore(MODE_UA_KEY);
+        if (mode !== 'auto' && chosenOn && chosenOn !== UA) {
+          mode = 'auto';
+          writeStore(MODE_KEY, null);
+          writeStore(MODE_UA_KEY, null);
+        }
+      }
+
+      // What flutter_bootstrap.js passes to the loader and to the engine.
+      function engineConfig() {
+        var config = {};
+        if (mode === 'direct') config.canvasKitForceMultiSurfaceRasterizer = true;
+        if (mode === 'cpu' || mode === 'safe') config.canvasKitForceCpuOnly = true;
+        if (mode === 'safe') config.canvasKitVariant = 'full';
+        return config;
+      }
+
+      // Which build this page starts. The code file it preloads is named by
+      // content (publish.sh) or carries ?v=<hash> (deploy.ps1), so this
+      // changes with every build that changes the code.
+      function buildVersion() {
+        var link = doc.querySelector('link[rel="preload"][as="script"]');
+        return String((link && link.getAttribute('href')) || 'unversioned');
+      }
+
+      // The text check runs once per phone, WebView version, mode and build:
+      // a few milliseconds, overlapping the rest of start-up.
+      var checkKey = UA + '|' + mode + '|' + buildVersion();
+      if (mode !== 'safe' && readStore(CHECKED_KEY) !== checkKey) {
+        doc.documentElement.setAttribute('data-niya-text-check', '1');
+      }
+
+      function switchMode(next, reason, automatic) {
+        writeStore(MODE_KEY, next === 'auto' ? null : next);
+        writeStore(MODE_UA_KEY, automatic && next !== 'auto' ? UA : null);
+        writeStore(CHECKED_KEY, null);
+        console.warn('[boot] display mode ' + mode + ' -> ' + next + ': ' + reason);
+      }
+
+      // Fetches the files this page names once more, past the phone's cache,
+      // so the next start cannot be handed an old copy of any of them: the
+      // font list, fonts, translations and asset list it preloads, and its
+      // scripts. Versioned names (?v=, main.<hash>.dart.js) are skipped - a
+      // new build has new ones, so they cannot be stale. Also retires a
+      // service worker that an old build may have left caching the whole
+      // app. Calls `then` when done, or after 8 seconds whatever happens.
+      function refreshCachedFiles(then) {
+        var finished = false;
+        function finish() {
+          if (finished) return;
+          finished = true;
+          then();
+        }
+        setTimeout(finish, 8000);
+        try {
+          if (!window.Promise) { finish(); return; }
+          var jobs = [];
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            jobs.push(navigator.serviceWorker.getRegistrations().then(function (registrations) {
+              return Promise.all(registrations.map(function (registration) {
+                var worker = registration.active || registration.waiting || registration.installing;
+                var script = worker ? String(worker.scriptURL) : '';
+                return /\/flutter_service_worker\.js(\?|$)/.test(script) ? registration.unregister() : null;
+              }));
+            }));
+          }
+          if (window.caches && window.caches.keys) {
+            jobs.push(window.caches.keys().then(function (names) {
+              return Promise.all(names.filter(function (name) {
+                return /^flutter-/.test(name);
+              }).map(function (name) {
+                return window.caches['delete'](name);
+              }));
+            }));
+          }
+          if (window.fetch) {
+            var origin = window.location.protocol + '//' + window.location.host + '/';
+            var seen = {};
+            var nodes = doc.querySelectorAll('link[rel="preload"][href], script[src]');
+            for (var i = 0; i < nodes.length; i++) {
+              var url = String(nodes[i].href || nodes[i].src || '');
+              if (!url || seen[url] || url.indexOf(origin) !== 0) continue;
+              if (url.indexOf('?') >= 0 || /\.[0-9a-f]{8,}\.dart\.js$/.test(url)) continue;
+              seen[url] = true;
+              jobs.push(window.fetch(url, { cache: 'reload', credentials: 'same-origin' }).then(function (response) {
+                // Read to the end: only a complete response replaces the
+                // copy in the cache.
+                return response.arrayBuffer();
+              }));
+            }
+          }
+          Promise.all(jobs.map(function (job) {
+            return job.then(null, function () { return null; });
+          })).then(finish, finish);
+        } catch (e) {
+          finish();
+        }
+      }
+
+      // Automatic, and never in a loop: at most three steps in ten minutes.
+      //
+      //   1. Once per build: fresh copies of the files. A phone that kept an
+      //      old font list or old fonts draws no text either, and for that
+      //      the cure is the right files, not software drawing.
+      //   2. Then towards software drawing: auto or direct -> cpu -> safe.
+      function escalate(reason) {
+        var nowMs = new Date().getTime();
+        var recent = [];
+        try {
+          recent = JSON.parse(readStore(SWITCHES_KEY) || '[]').filter(function (t) { return nowMs - t < 600000; });
+        } catch (e) { recent = []; }
+        if (recent.length >= 3) {
+          console.warn('[boot] display left as it is (three steps already): ' + reason);
+          return;
+        }
+        var build = buildVersion();
+        var refresh = readStore(REFRESHED_KEY) !== build;
+        var next = { auto: 'cpu', direct: 'cpu', cpu: 'safe' }[mode];
+        if (!refresh && !next) return;
+
+        recent.push(nowMs);
+        writeStore(SWITCHES_KEY, JSON.stringify(recent));
+        // Keep this screen up until the reload: nobody needs to see the
+        // screen that just failed.
+        holdUntil = now() + 60000;
+        if (refresh) {
+          writeStore(REFRESHED_KEY, build);
+          console.warn('[boot] ' + reason + ': fetching fresh copies of the app files');
+          refreshCachedFiles(function () { window.location.reload(); });
+          return;
+        }
+        switchMode(next, reason, true);
+        window.location.reload();
+      }
+
+      window.addEventListener('niya-text-check', function (event) {
+        var result = String((event && event.detail) || '');
+        stamps.textCheck = result;
+        if (result === 'ok') writeStore(CHECKED_KEY, checkKey);
+        else if (result === 'fail') escalate('text did not draw in ' + mode + ' mode');
+      });
+
+      // The phone, in one line, for a screenshot sent to support.
+      function graphicsChip() {
+        try {
+          var canvas = doc.createElement('canvas');
+          var gl = canvas.getContext('webgl2');
+          var version = gl ? 'WebGL2' : 'WebGL1';
+          if (!gl) gl = canvas.getContext('webgl');
+          if (!gl) return 'no WebGL';
+          var info = gl.getExtension('WEBGL_debug_renderer_info');
+          var name = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+          var lose = gl.getExtension('WEBGL_lose_context');
+          if (lose) lose.loseContext();
+          return version + ' ' + name;
+        } catch (e) {
+          return 'WebGL error';
+        }
+      }
+
+      function deviceSummary() {
+        var ua = String(navigator.userAgent || '');
+        var android = (ua.match(/Android ([\d.]+)/) || [])[1];
+        var model = ((ua.match(/Android [\d.]+; ([^;)]+)/) || [])[1] || '').replace(/\s+Build\/.*$/, '');
+        var chrome = (ua.match(/Chrome\/([\d.]+)/) || [])[1];
+        var fontSize = '';
+        try { fontSize = window.getComputedStyle(doc.documentElement).fontSize; } catch (e) {}
+        return [
+          model || 'unknown phone',
+          android ? 'Android ' + android : 'not Android',
+          (/; wv\)/.test(ua) ? 'WebView ' : 'Chrome ') + (chrome || '?'),
+          graphicsChip(),
+          'dpr ' + (window.devicePixelRatio || 1),
+          'text ' + (fontSize || '?'),
+          'mode ' + mode,
+          'build ' + (buildVersion().match(/v=([0-9a-f]+)|main\.([0-9a-f]+)\.dart\.js/) || [0, 'unversioned']).slice(1).join('')
+        ].join(' · ');
+      }
+
+      if (mode !== 'auto') {
+        modeBox.textContent = 'Display mode: ' + MODE_NAMES[mode];
+        modeBox.style.display = 'block';
+      }
+
+      // Five quick taps on the logo: next mode. The loading screen waits
+      // while someone is tapping, so a fast start does not snatch it away,
+      // and then stays up six seconds - time for a screenshot of the details
+      // - while fresh copies of the files are fetched.
+      var taps = [];
+      logo.addEventListener('click', function () {
+        var t = now();
+        if (holdUntil < t + 3000) holdUntil = t + 3000;
+        taps = taps.filter(function (x) { return t - x < 3000; });
+        taps.push(t);
+        if (taps.length < 5) return;
+        taps = [];
+        var next = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+        switchMode(next, 'changed by hand');
+        writeStore(SWITCHES_KEY, null);
+        writeStore(REFRESHED_KEY, null);
+        holdUntil = t + 60000;
+        modeBox.textContent = 'Display mode: ' + MODE_NAMES[next] + ' - reloading…';
+        modeBox.style.display = 'block';
+        detail.textContent = deviceSummary();
+        detail.style.display = 'block';
+        var fetched = false;
+        var waited = false;
+        function reloadWhenBoth() {
+          if (fetched && waited) window.location.reload();
+        }
+        refreshCachedFiles(function () { fetched = true; reloadWhenBoth(); });
+        setTimeout(function () { waited = true; reloadWhenBoth(); }, 6000);
+      });
 
       // --- The logo, at exactly SplashScreen's size ------------------------
       //
@@ -548,6 +846,9 @@
       var stalled = false;
 
       function paint() {
+        // Frozen where it stopped once start-up has failed: a bar still
+        // moving under "did not finish loading" would contradict it.
+        if (failedShown) return;
         var a = achieved();
         if (a !== lastAchieved) { lastAchieved = a; lastGain = now(); }
         var target = a;
@@ -638,7 +939,8 @@
           'engine ' + ((done.wasm || done.engine) ? 'ok' : '…'),
           'files ' + (done.engine ? filesTotal : filesDone) + '/' + filesTotal,
           'start ' + (done.start ? 'ok' : '…'),
-          Math.round((now() - T0) / 1000) + ' s'
+          Math.round((now() - T0) / 1000) + ' s',
+          'mode ' + mode
         ];
         var net = network();
         if (net) parts.push(net);
@@ -671,6 +973,10 @@
 
       function reveal(reason) {
         if (dismissed) return;
+        if (now() < holdUntil) {
+          setTimeout(function () { reveal(reason); }, holdUntil - now());
+          return;
+        }
         dismissed = true;
         mark('draw');
         for (var t = 0; t < timers.length; t++) { clearTimeout(timers[t]); clearInterval(timers[t]); }
@@ -754,7 +1060,13 @@
         fail: fail,
         reveal: reveal,
         stamps: stamps,
-        report: function () { return diagnostics(''); }
+        report: function () { return diagnostics('') + ' · ' + deviceSummary(); }
+      };
+
+      // Read by flutter_bootstrap.js before it starts the engine.
+      window.niyaRender = {
+        mode: mode,
+        engineConfig: engineConfig
       };
     })();
   </script>
@@ -788,6 +1100,6 @@
     at the top of this file for why that is load-bearing — and report start-up
     progress to the loading screen above.
   -->
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js?v=e0ac4cfcda63" async></script>
 </body>
 </html>

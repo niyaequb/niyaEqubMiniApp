@@ -82,7 +82,7 @@ addEventListener("message", eventListener);
 if (!window._flutter) {
   window._flutter = {};
 }
-_flutter.buildConfig = {"engineRevision":"a10d8ac38de835021c8d2f920dbf50a920ccc030","builds":[{"compileTarget":"dart2js","renderer":"canvaskit","mainJsPath":"main.dart.js"},{}],"useLocalCanvasKit":true};
+_flutter.buildConfig = {"engineRevision":"a10d8ac38de835021c8d2f920dbf50a920ccc030","builds":[{"compileTarget":"dart2js","renderer":"canvaskit","mainJsPath":"main.dart.js?v=f5542b530039"},{}],"useLocalCanvasKit":true};
 
 
 (function () {
@@ -185,6 +185,21 @@ _flutter.buildConfig = {"engineRevision":"a10d8ac38de835021c8d2f920dbf50a920ccc0
   ensureHostIsSized();
   window.addEventListener('resize', ensureHostIsSized);
 
+  // --- Display mode -------------------------------------------------------------
+  //
+  // index.html decides how Flutter should draw on this phone (see "Display
+  // mode" there): the default, direct WebGL, or software. This merges its
+  // choice into both configs below. Without index.html's script it is the
+  // default, exactly as before.
+  var renderConfig = (window.niyaRender && window.niyaRender.engineConfig && window.niyaRender.engineConfig()) || {};
+
+  function withRenderConfig(base) {
+    for (var key in renderConfig) {
+      if (Object.prototype.hasOwnProperty.call(renderConfig, key)) base[key] = renderConfig[key];
+    }
+    return base;
+  }
+
   // --- Start ------------------------------------------------------------------
   //
   // Progress reported on the way: 'code' when main.dart.js has run, 'engine'
@@ -192,11 +207,12 @@ _flutter.buildConfig = {"engineRevision":"a10d8ac38de835021c8d2f920dbf50a920ccc0
   // initializeEngine waits for), 'start' once Dart's main() is running.
   try {
     _flutter.loader.load({
-      // Passed here for the default path...
-      config: {
+      // Passed here for the default path - and this one is where the loader
+      // reads canvasKitVariant, when choosing which CanvasKit to download...
+      config: withRenderConfig({
         hostElement: host || undefined,
         canvasKitBaseUrl: CANVASKIT_BASE_URL,
-      },
+      }),
 
       onEntrypointLoaded: async function (engineInitializer) {
         boot.mark('code');
@@ -208,10 +224,10 @@ _flutter.buildConfig = {"engineRevision":"a10d8ac38de835021c8d2f920dbf50a920ccc0
           // to the engine, so the hostElement set above is not forwarded.
           // Omitting it is the easiest way to get a correctly-written frame
           // that Flutter then ignores, rendering full-width anyway.
-          var appRunner = await engineInitializer.initializeEngine({
+          var appRunner = await engineInitializer.initializeEngine(withRenderConfig({
             hostElement: host || undefined,
             canvasKitBaseUrl: CANVASKIT_BASE_URL,
-          });
+          }));
           boot.mark('engine');
 
           await appRunner.runApp();
