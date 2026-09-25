@@ -68,25 +68,71 @@
   <title>Niya Umrah Equb</title>
 
   <!--
+    START EVERY DOWNLOAD THE APP IS GOING TO ASK FOR, NOW.
+
+    Without these, start-up is a staircase. The page loads flutter_bootstrap.js;
+    that starts main.dart.js and CanvasKit; only once main.dart.js has arrived
+    and run does the engine ask for FontManifest.json, then for the fonts it
+    lists; only after that does Dart ask for the translations - one file at a
+    time, because get_di.dart awaits them in a loop - and the asset manifest.
+    Each step waits for the one before, so on a mobile connection every step
+    costs a full round trip on top of its download.
+
+    Preloading them here starts all of it in the first round trip, side by side
+    with main.dart.js and CanvasKit. When Flutter asks, the bytes are already
+    here.
+
+    THE ATTRIBUTES ARE NOT DECORATION. A preload is only reused if the later
+    request matches it exactly:
+
+      * main.dart.js is loaded by a plain <script> element, so its preload is
+        as="script" with NO crossorigin attribute;
+      * everything else is fetched with fetch(), so those are as="fetch" WITH
+        crossorigin="anonymous". Leave that off and the browser downloads each
+        file twice - once for the preload, once for the real request.
+
+    CanvasKit itself is NOT preloaded. The loader picks one of two builds at
+    runtime (canvaskit/ or canvaskit/chromium/) from browser features; a guess
+    here that disagreed would download six megabytes for nothing. The loader
+    starts it the moment flutter_bootstrap.js runs, which is early enough.
+
+    The font list must match the `fonts:` section of pubspec.yaml. The paths
+    must match the build output: MiniApp/hosting/publish.sh warns about any
+    preload here that points at a file the build does not contain, and renames
+    main.dart.js in this file when it gives it a content hash.
+
+    The preconnect warms the connection to the API during the download, so the
+    first request the app makes does not also pay for DNS, TCP and TLS.
+  -->
+  <link rel="preconnect" href="https://cms.niya-et.com" crossorigin>
+  <link rel="preload" href="main.dart.js" as="script">
+  <link rel="preload" href="assets/FontManifest.json" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/fonts/Inter-Regular.ttf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/fonts/Inter-Medium.ttf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/fonts/Inter-SemiBold.ttf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/fonts/Inter-Bold.ttf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/fonts/MaterialIcons-Regular.otf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/packages/cupertino_icons/assets/CupertinoIcons.ttf" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/AssetManifest.bin.json" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/assets/lang/am.json" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/assets/lang/en.json" as="fetch" crossorigin="anonymous">
+  <link rel="preload" href="assets/assets/lang/om.json" as="fetch" crossorigin="anonymous">
+
+  <!--
     NOTHING THIS APP NEEDS IS FETCHED FROM ANOTHER ORIGIN. THAT IS DELIBERATE.
 
     There used to be two preconnects to Google's font CDN here, because
     google_fonts downloads its families at runtime and CanvasKit was being
     pulled from gstatic. Both are gone:
 
-      * the text fonts are bundled - see `fonts/` and the `fonts:` section of
-        pubspec.yaml - and google_fonts has runtime fetching switched off in
-        main.dart;
+      * the text font is bundled - see `fonts/` and the `fonts:` section of
+        pubspec.yaml - and on web nothing calls google_fonts any more;
       * CanvasKit is served from this origin - see flutter_bootstrap.js.
-
-    Preconnecting warms a connection this build never opens, so the hints were
-    removed with the dependency. If either ever comes back, so should they.
 
     Why it mattered: inside the Dashen SuperApp those requests do not arrive.
     The engine renders text with whatever fonts are registered, and with none
     registered it lays every string out at the right width and draws no glyphs
-    at all - so icons appeared, buttons and labels and input text did not, and
-    the screen looked like a broken stylesheet rather than a missing download.
+    at all.
   -->
 
   <!--
@@ -100,9 +146,15 @@
     Without these two lines every Fluttertoast.showToast call fails silently —
     no error, no toast. That covers most of the app's inline feedback: failed
     logins, validation messages, "payment received".
+
+    The stylesheet is loaded with media="print" and switched on when it
+    arrives, so it cannot hold up the first paint of the loading screen below.
+    A plain <link rel="stylesheet"> in the head blocks rendering until it has
+    downloaded - on a slow connection that was a blank page before the logo.
   -->
   <link rel="stylesheet" type="text/css"
-        href="assets/packages/fluttertoast/assets/toastify.css">
+        href="assets/packages/fluttertoast/assets/toastify.css"
+        media="print" onload="this.media='all'">
   <script src="assets/packages/fluttertoast/assets/toastify.js" defer></script>
 
   <style>
@@ -112,6 +164,9 @@
       --app-max-width: 460px;
       --page-bg: #101114;
       --app-bg: #FFFFFF;
+      /* The red of the logo, so the progress bar belongs to it. */
+      --brand: #B41C38;
+      --track: #ECEEF2;
     }
 
     html, body {
@@ -148,8 +203,8 @@
       `position: fixed; inset: 0` needs no unit support at all: it sizes to the
       viewport in every engine going back years, it is immune to the document
       growing, and it cannot be knocked out by a host stylesheet the way a
-      single unsupported declaration can. The JS below is the last resort for
-      an engine that gets even this wrong.
+      single unsupported declaration can. flutter_bootstrap.js is the last
+      resort for an engine that gets even this wrong.
     */
     #app-shell {
       position: fixed;
@@ -181,23 +236,23 @@
     }
 
     /*
-      BOOT SPLASH
+      LOADING SCREEN
 
-      Covers the gap between the page loading and Flutter's first paint — which
-      on web is long, because several megabytes of CanvasKit and app code have
-      to arrive first. Without it the user stares at an empty rectangle and
-      assumes the page is broken.
+      Covers the gap between the page loading and Flutter's first frame. It is
+      a SIBLING of #app-frame, not a child - Flutter takes ownership of its host
+      element's contents - and it sits over the whole viewport, with an inner
+      card that reuses --app-max-width so it lines up exactly with the app.
 
-      Rewritten from the first version, which had a bug worth recording: it was
-      absolutely positioned INSIDE #app-shell with its own max-width and auto
-      margins, so it did not line up with #app-frame and left a white column
-      down one side. It is now position:fixed over the whole viewport, with an
-      inner card that reuses the exact same --app-max-width, so it is
-      guaranteed to sit exactly where the app will appear.
+      IT IS BUILT TO BE INDISTINGUISHABLE FROM THE APP'S OWN SPLASH SCREEN.
+      Same white, same logo, and - computed by the script below from the same
+      screenutil settings main.dart uses - the same size and position. It stays
+      up until Dart reports that its first frame is on screen, so the handover
+      is invisible: no blink, no jump, no white page in between.
 
-      It is also a SIBLING of #app-frame, not a child: Flutter takes ownership
-      of its host element's contents, so a splash placed inside would be
-      removed at an unpredictable moment rather than when we choose.
+      The progress bar is honest about what it knows. It moves when the files
+      that matter actually finish (the script watches them arrive), creeps
+      slowly in between so a slow connection still looks alive, and never
+      claims to be done before the app has drawn.
     */
     #boot-splash {
       position: fixed;
@@ -207,10 +262,10 @@
       display: flex;
       justify-content: center;
       background: var(--page-bg);
-      /* 180ms, down from 300ms. Long enough to read as a fade rather than a
-         cut, short enough that it is not felt as waiting. The JS removal
-         timer uses the same figure. */
-      transition: opacity 180ms ease;
+      /* Long enough to read as a fade rather than a cut, short enough that it
+         is not felt as waiting. The script's removal timer uses the same
+         figure. */
+      transition: opacity 200ms ease;
     }
 
     #boot-splash.gone {
@@ -218,24 +273,26 @@
       pointer-events: none;
     }
 
-    /* The white "phone" the logo sits on. Same width rule as #app-frame, so
-       the handover to Flutter is invisible. */
+    /* The white "phone". Same width rule as #app-frame. */
     #boot-splash .card {
+      position: relative;
       width: 100%;
       max-width: var(--app-max-width);
       height: 100%;
       background: var(--app-bg);
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
     }
 
-    #boot-splash img {
+    #boot-logo {
+      /* Replaced by the script before the first paint with the exact size the
+         Dart SplashScreen draws. This is only the fallback if it cannot run. */
       width: 72%;
       max-width: 300px;
-      /* Same 1.00 -> 1.03 pulse as the Dart SplashScreen, so the handover from
-         this to Flutter's own splash is not visible as a change in motion. */
+      object-fit: contain;
+      /* Same 1.00 -> 1.03 pulse as the Dart SplashScreen, so the handover is
+         not visible as a change in motion either. */
       animation: breathe 2800ms ease-in-out infinite;
     }
 
@@ -244,40 +301,100 @@
       50%      { transform: scale(1.03); }
     }
 
+    /* Out of the flex flow on purpose: anything in the flow would push the
+       logo off the centre that SplashScreen uses. */
+    #boot-status {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 12%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 24px;
+    }
+
+    #boot-bar {
+      width: 168px;
+      max-width: 50%;
+      height: 3px;
+      border-radius: 3px;
+      background: var(--track);
+      overflow: hidden;
+    }
+
+    #boot-bar-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: 3px;
+      background: var(--brand);
+      transform: scaleX(0.02);
+      transform-origin: left center;
+      transition: transform 320ms ease-out;
+    }
+
+    #boot-status.failed #boot-bar { display: none; }
+
+    /* Once start-up has failed there is no handover left to line up with, so
+       the logo steps back and the message sits under it in the normal flow -
+       anchored to the bottom, a three-line message would run into the logo on
+       a short screen. */
+    #boot-splash.failed .card { flex-direction: column; }
+    #boot-splash.failed #boot-logo {
+      width: auto;
+      height: auto;
+      max-width: 56%;
+      max-height: 36vh;
+      animation: none;
+    }
+    #boot-splash.failed #boot-status {
+      position: static;
+      margin-top: 8px;
+    }
+
     /*
       TWO MESSAGES, NOT ONE.
 
       #boot-note is patience — "still going, the connection is slow". It is grey
       and it makes no claim about anything being wrong.
 
-      #boot-error is a verdict, and it is only ever shown once waiting has
-      genuinely stopped being the explanation. Saying "this did not load" over
-      an app that is still downloading is worse than saying nothing: the user
-      refreshes, throws away a part-finished download, and starts again.
+      #boot-error is a verdict, and it is only shown once waiting has genuinely
+      stopped being the explanation, or a file has actually failed. Saying
+      "this did not load" over an app that is still downloading is worse than
+      saying nothing: the user refreshes, throws away a part-finished download,
+      and starts again.
+
+      Both are in the member's language when the app has one saved, and in
+      Amharic - the app's default - otherwise.
     */
     #boot-note,
-    #boot-error {
+    #boot-error,
+    #boot-detail {
       display: none;
       max-width: 320px;
-      margin-top: 22px;
-      padding: 0 24px;
-      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin-top: 16px;
+      font: 13px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Ethiopic", "Nyala", sans-serif;
       text-align: center;
       word-break: break-word;
     }
 
-    #boot-note  { color: #6B7280; }
-    #boot-error { color: #B01F2E; }
+    #boot-note   { color: #6B7280; }
+    #boot-error  { color: #B01F2E; }
+    #boot-detail {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #9CA3AF;
+    }
 
     #boot-retry {
       display: none;
-      margin-top: 14px;
-      padding: 9px 22px;
-      font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: #111;
-      background: #E9B10A;
+      margin-top: 16px;
+      padding: 10px 26px;
+      font: 600 14px system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Ethiopic", "Nyala", sans-serif;
+      color: #1F2937;
+      background: #D7A203;
       border: 0;
-      border-radius: 10px;
+      border-radius: 12px;
       cursor: pointer;
     }
   </style>
@@ -290,12 +407,357 @@
 
   <div id="boot-splash">
     <div class="card">
-      <img src="assets/assets/images/Loading.png" alt="Niya Umrah Equb">
-      <div id="boot-note"></div>
-      <div id="boot-error"></div>
-      <button id="boot-retry" type="button">Try again</button>
+      <img id="boot-logo" src="assets/assets/images/Loading.png" alt="Niya Umrah Equb"
+           fetchpriority="high" decoding="async">
+      <div id="boot-status" role="status" aria-live="polite">
+        <div id="boot-bar"><div id="boot-bar-fill"></div></div>
+        <div id="boot-note"></div>
+        <div id="boot-error"></div>
+        <div id="boot-detail"></div>
+        <button id="boot-retry" type="button"></button>
+      </div>
     </div>
   </div>
+
+  <!--
+    The loading screen's behaviour. Inline and before everything else, so it is
+    running from the first paint - including when flutter_bootstrap.js itself
+    is what fails to arrive.
+
+    flutter_bootstrap.js reports progress to it through window.niyaBoot:
+    mark('code') when main.dart.js has run, mark('engine') when CanvasKit and
+    the fonts are in, mark('start') when Dart's main() is running, and fail()
+    if start-up throws. Dart announces its first frame with a
+    'niya-first-frame' event (web_overrides/main.dart), and that - not the
+    engine starting - is what takes this screen away.
+  -->
+  <script>
+    (function () {
+      'use strict';
+
+      var perf = window.performance;
+      function now() { return perf && perf.now ? perf.now() : new Date().getTime(); }
+      var T0 = now();
+
+      var doc = document;
+      var frame = doc.getElementById('app-frame');
+      var splash = doc.getElementById('boot-splash');
+      var status = doc.getElementById('boot-status');
+      var logo = doc.getElementById('boot-logo');
+      var fill = doc.getElementById('boot-bar-fill');
+      var note = doc.getElementById('boot-note');
+      var errorBox = doc.getElementById('boot-error');
+      var detail = doc.getElementById('boot-detail');
+      var retry = doc.getElementById('boot-retry');
+
+      // --- Language ---------------------------------------------------------
+      //
+      // The language the member chose in the app, which shared_preferences
+      // keeps in localStorage as a JSON string under "flutter.language_code".
+      // Amharic, the app's own default, when there is none yet.
+      //
+      // The Amharic and Afaan Oromo loading strings reuse wording already in
+      // Mobile/assets/lang where it exists ("... በመዘጋጀት ላይ", "እንደገና
+      // ይሞክሩ", "Irra deebi'ii yaali"); the rest should be read by a native
+      // speaker, like any new key.
+      var TEXT = {
+        am: {
+          slow: 'አሁንም በመጫን ላይ ነው። ግንኙነትዎ ቀርፋፋ ከሆነ ትንሽ ሊቆይ ይችላል፤ እባክዎ ይህን ገጽ አይዝጉ።',
+          failed: 'መተግበሪያው መጫን አልተሳካም። ግንኙነትዎን ያረጋግጡና እንደገና ይሞክሩ።',
+          retry: 'እንደገና ይሞክሩ'
+        },
+        en: {
+          slow: 'Still loading. On a slow connection this can take a little longer — please keep this screen open.',
+          failed: 'The app did not finish loading. Check your connection and try again.',
+          retry: 'Try again'
+        },
+        om: {
+          slow: "Ammas fe'aa jira. Walqunnamtiin kee suuta yoo ta'e yeroo muraasa fudhachuu danda'a — maaloo eegi.",
+          failed: "Appiin fe'uu hin dandeenye. Walqunnamtii kee mirkaneessi, irra deebi'ii yaali.",
+          retry: "Irra deebi'ii yaali"
+        }
+      };
+
+      var lang = 'am';
+      try {
+        var saved = window.localStorage && window.localStorage.getItem('flutter.language_code');
+        if (saved) {
+          saved = JSON.parse(saved);
+          if (TEXT.hasOwnProperty(saved)) lang = saved;
+        }
+      } catch (e) { /* private mode, blocked storage: keep the default */ }
+      var text = TEXT[lang];
+      retry.textContent = text.retry;
+      retry.onclick = function () { window.location.reload(); };
+
+      // --- The logo, at exactly SplashScreen's size ------------------------
+      //
+      // SplashScreen draws Loading.png in a square box of 380.r, BoxFit.contain,
+      // centred. With the ScreenUtilInit settings in main.dart - design size
+      // 360 x 690, splitScreenMode on - .r is
+      //
+      //     min(width / 360, max(height, 700) / 690)
+      //
+      // and the box is capped by the screen on each side, as RenderImage caps
+      // it. Change the design size, the flag or _logoSize in the Dart code and
+      // this has to change with it, or the logo jumps at the handover.
+      function sizeLogo() {
+        if (!frame || !logo) return;
+        var w = frame.clientWidth;
+        var h = frame.clientHeight;
+        if (!w || !h) return;
+        var r = Math.min(w / 360, Math.max(h, 700) / 690);
+        var box = 380 * r;
+        logo.style.maxWidth = 'none';
+        logo.style.width = Math.min(box, w) + 'px';
+        logo.style.height = Math.min(box, h) + 'px';
+      }
+      sizeLogo();
+      window.addEventListener('resize', sizeLogo);
+
+      // --- Progress ---------------------------------------------------------
+      //
+      // Weighted roughly by bytes on the wire: CanvasKit is the largest
+      // download, main.dart.js the next, then the fonts, manifests and
+      // translations preloaded in <head>. The last stretch is the engine
+      // starting and Dart drawing its first frame.
+      var done = {};
+      var stamps = {};
+      var fileUrls = {};
+      var filesTotal = 0;
+      var filesDone = 0;
+      var links = doc.querySelectorAll('link[rel="preload"][as="fetch"]');
+      for (var i = 0; i < links.length; i++) {
+        if (!fileUrls[links[i].href]) { fileUrls[links[i].href] = 1; filesTotal++; }
+      }
+
+      function achieved() {
+        if (done.draw) return 100;
+        var a = 4;
+        if (done.wasm || done.engine) a += 44;
+        if (done.code) a += 30;
+        a += (done.engine || !filesTotal) ? 12 : 12 * Math.min(filesDone, filesTotal) / filesTotal;
+        if (done.engine) a += 3;
+        if (done.start) a += 3;
+        return a;
+      }
+
+      var shown = 2;
+      var lastAchieved = -1;
+      var lastGain = T0;
+      var stalled = false;
+
+      function paint() {
+        var a = achieved();
+        if (a !== lastAchieved) { lastAchieved = a; lastGain = now(); }
+        var target = a;
+        if (!done.draw && !stalled) {
+          // Creep towards, but never reach, the halfway point of what is left,
+          // and never past 96% before the app has actually drawn.
+          var ceiling = Math.min(96, a + (100 - a) * 0.5);
+          target = a + (ceiling - a) * (1 - Math.exp(-(now() - lastGain) / 9000));
+        }
+        if (target > shown) shown = target;
+        fill.style.transform = 'scaleX(' + (shown / 100).toFixed(4) + ')';
+      }
+
+      var ticker = setInterval(paint, 250);
+      paint();
+
+      function mark(step) {
+        if (done[step]) return;
+        done[step] = true;
+        stamps[step] = Math.round(now() - T0);
+        if (step === 'start') armFirstFrameFallback();
+        paint();
+      }
+
+      // Resource timing records failed downloads too. responseStatus says
+      // which ones failed (0 for a network error); older engines lack it, and
+      // there a download that produced no bytes at all is taken as a failure.
+      // CanvasKit and main.dart.js failing is fatal - say so at once rather
+      // than let the bar creep for a minute. A failed preload is not: Flutter
+      // asks for the file again itself.
+      function failedDownload(entry) {
+        var status = entry.responseStatus;
+        if (typeof status === 'number') return status === 0 || status >= 400;
+        return entry.transferSize === 0 && entry.decodedBodySize === 0;
+      }
+
+      function onResource(entry) {
+        var name = entry.name;
+        var critical = /canvaskit\.wasm(\?|$)/.test(name) ? 'wasm'
+            : /(^|\/)main(\.[0-9a-f]+)?\.dart\.js(\?|$)/.test(name) ? 'code' : null;
+        if (critical) {
+          if (failedDownload(entry)) fail('could not download ' + name.split('/').pop());
+          else mark(critical);
+        } else if (fileUrls[name] === 1 && !failedDownload(entry)) {
+          fileUrls[name] = 2;
+          filesDone++;
+          paint();
+        }
+      }
+
+      try {
+        if (window.PerformanceObserver) {
+          var observer = new PerformanceObserver(function (list) {
+            var entries = list.getEntries();
+            for (var k = 0; k < entries.length; k++) onResource(entries[k]);
+          });
+          try {
+            observer.observe({ type: 'resource', buffered: true });
+          } catch (e) {
+            observer.observe({ entryTypes: ['resource'] });
+          }
+        }
+      } catch (e) { /* no resource timing: the loader's milestones still move the bar */ }
+
+      // --- Messages ---------------------------------------------------------
+      var timers = [];
+      var dismissed = false;
+      var failedShown = false;
+
+      function show(el, value) {
+        el.textContent = value;
+        el.style.display = 'block';
+      }
+
+      function network() {
+        var c = navigator.connection;
+        if (!c) return '';
+        var s = c.effectiveType || '';
+        if (c.downlink) s += (s ? ' ' : '') + c.downlink + ' Mb/s';
+        return s;
+      }
+
+      // One line for whoever gets the screenshot: what arrived, what did not,
+      // how long it has been, and what the browser thinks of the connection.
+      function diagnostics(reason) {
+        var parts = [
+          'code ' + (done.code ? 'ok' : '…'),
+          'engine ' + ((done.wasm || done.engine) ? 'ok' : '…'),
+          'files ' + (done.engine ? filesTotal : filesDone) + '/' + filesTotal,
+          'start ' + (done.start ? 'ok' : '…'),
+          Math.round((now() - T0) / 1000) + ' s'
+        ];
+        var net = network();
+        if (net) parts.push(net);
+        if (reason) parts.push(String(reason).slice(0, 160));
+        return parts.join(' · ');
+      }
+
+      // False once the splash is gone - including when an older
+      // flutter_bootstrap.js, cached next to this page, removed it itself.
+      function alive() {
+        return !dismissed && !!splash.parentNode;
+      }
+
+      function fail(reason) {
+        if (!alive() || failedShown) return;
+        failedShown = true;
+        stalled = true;
+        console.error('[boot] ' + (reason || 'start-up did not complete'));
+        note.style.display = 'none';
+        status.className = 'failed';
+        splash.className = 'failed';
+        window.removeEventListener('resize', sizeLogo);
+        logo.style.width = '';
+        logo.style.height = '';
+        logo.style.maxWidth = '';
+        show(errorBox, text.failed);
+        show(detail, diagnostics(reason));
+        retry.style.display = 'inline-block';
+      }
+
+      function reveal(reason) {
+        if (dismissed) return;
+        dismissed = true;
+        mark('draw');
+        for (var t = 0; t < timers.length; t++) { clearTimeout(timers[t]); clearInterval(timers[t]); }
+        stamps.visible = Math.round(now() - T0);
+        console.info('[boot] app visible (' + reason + ') ' + JSON.stringify(stamps));
+        // Let the bar reach the end before the fade starts.
+        setTimeout(function () {
+          splash.className = 'gone';
+          setTimeout(function () {
+            clearInterval(ticker);
+            window.removeEventListener('resize', sizeLogo);
+            if (splash.parentNode) splash.parentNode.removeChild(splash);
+          }, 220);
+        }, 140);
+      }
+
+      // Dart's first frame. Two animation frames later it is certainly on
+      // screen, and the fade uncovers exactly what this screen was showing.
+      window.addEventListener('niya-first-frame', function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () { reveal('first frame'); });
+        });
+      });
+
+      // If Dart is running but never says so - an older build, or start-up
+      // failing before runApp - do not keep the app hidden behind this screen.
+      function armFirstFrameFallback() {
+        timers.push(setTimeout(function () { reveal('no first-frame signal'); }, 12000));
+      }
+
+      // Patience first, a verdict only much later. Both are cancelled the
+      // moment the app is on screen, so a normal start never sees either.
+      timers.push(setTimeout(function () {
+        if (alive() && !failedShown && !done.start) show(note, text.slow);
+      }, 20000));
+
+      // The verdict waits for the downloads to stall, not for a fixed time. On
+      // a slow first visit the files can take well over a minute to arrive,
+      // and a "did not load" with a reload button over a download that is
+      // still progressing makes the member throw it away and start again. So:
+      // after a minute, only once nothing new has arrived for 45 seconds; and
+      // regardless after three minutes.
+      timers.push(setInterval(function () {
+        if (!alive() || failedShown || done.start) return;
+        var elapsed = now() - T0;
+        var idle = now() - lastGain;
+        if ((elapsed >= 60000 && idle >= 45000) || elapsed >= 180000) fail('timed out');
+      }, 5000));
+
+      // A file that fails outright need not wait for the timer. Resource
+      // errors do not bubble, so this listens in the capture phase; only the
+      // two files the app cannot start without count. A failed preload is not
+      // fatal - Flutter will ask for the file again itself.
+      window.addEventListener('error', function (event) {
+        var target = event && event.target;
+        if (!target || target === window) return;
+        var url = target.src || target.href || '';
+        if (target.tagName === 'SCRIPT' &&
+            /(flutter_bootstrap\.js|(^|\/)main(\.[0-9a-f]+)?\.dart\.js)(\?|$)/.test(url)) {
+          fail('could not download ' + url.split('/').pop());
+        }
+      }, true);
+
+      // Before Dart is running, an unhandled rejection that mentions a download
+      // or compilation is the loader failing - CanvasKit's WASM most often,
+      // which otherwise leaves the loader waiting for ever. Anything else is
+      // only logged, and nothing after start-up is treated as fatal here.
+      window.addEventListener('unhandledrejection', function (event) {
+        if (done.start || dismissed) return;
+        var reason = event && event.reason;
+        var message = String((reason && (reason.message || reason)) || '');
+        if (/fetch|network|download|wasm|webassembly|compile|import|load/i.test(message)) {
+          fail('start-up error: ' + message);
+        } else {
+          console.warn('[boot] unhandled rejection during start-up: ' + message);
+        }
+      });
+
+      window.niyaBoot = {
+        mark: mark,
+        fail: fail,
+        reveal: reveal,
+        stamps: stamps,
+        report: function () { return diagnostics(''); }
+      };
+    })();
+  </script>
 
   <!--
     DASHEN SUPERAPP SIMULATOR — development and UAT only.
@@ -323,7 +785,8 @@
   <!--
     flutter_bootstrap.js is normally generated by the Flutter tool. This
     project ships its own template so it can pass hostElement — see the comment
-    at the top of this file for why that is load-bearing.
+    at the top of this file for why that is load-bearing — and report start-up
+    progress to the loading screen above.
   -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
