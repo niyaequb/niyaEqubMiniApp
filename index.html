@@ -105,7 +105,7 @@
     first request the app makes does not also pay for DNS, TCP and TLS.
   -->
   <link rel="preconnect" href="https://cms.niya-et.com" crossorigin>
-  <link rel="preload" href="main.dart.js?v=f5542b530039" as="script">
+  <link rel="preload" href="main.dart.js?v=a0e3e5c3b389" as="script">
   <link rel="preload" href="assets/FontManifest.json" as="fetch" crossorigin="anonymous">
   <link rel="preload" href="assets/fonts/Inter-Regular.ttf" as="fetch" crossorigin="anonymous">
   <link rel="preload" href="assets/fonts/Inter-Medium.ttf" as="fetch" crossorigin="anonymous">
@@ -187,6 +187,38 @@
       /* No rubber-banding or pull-to-refresh behind the app. In a host WebView
          that gesture belongs to the host, not to us. */
       overscroll-behavior: none;
+    }
+
+    /*
+      THE PHONE'S FONT SIZE MUST NOT REACH FLUTTER THROUGH THIS ELEMENT.
+
+      A Flutter bug (flutter/flutter#190350, Flutter 3.40 up to at least
+      3.44.8 - this app is built with 3.44.4). The web engine appends a hidden
+      <p aria-hidden="true"> to <body>, sets its line-height, letter-spacing,
+      word-spacing and bottom margin to 9999px, and reads them back to detect
+      text-spacing settings a reader has applied. An Android WebView scales the
+      page's text by the phone's font size (Settings > Display > Font size)
+      whenever that is not exactly 100%, and then the line-height read back is
+      no longer the 9999px the engine expects. It takes the ratio, about 625,
+      as the reader's line height: every Text in the app gets lines 625 times
+      its font size - an 18px label becomes thousands of pixels tall.
+
+      That is the "half-drawn app": text drawn far below the screen, labels
+      missing, buttons stretched to fill it. It happens on every phone whose
+      font size is not the default, in the Dashen SuperApp or any other
+      WebView; icons and images are not text, so they still show.
+
+      Resetting these four properties makes the engine read nothing, which is
+      what it reads on a phone at 100%. The phone's font size itself still
+      applies: the engine takes it from the page's root font size, not from
+      this element. main.dart clears the same four overrides again on the
+      Dart side, in case a later engine measures differently.
+    */
+    body > p[aria-hidden="true"] {
+      line-height: normal !important;
+      letter-spacing: normal !important;
+      word-spacing: normal !important;
+      margin: 0 !important;
     }
 
     /*
@@ -1100,6 +1132,6 @@
     at the top of this file for why that is load-bearing — and report start-up
     progress to the loading screen above.
   -->
-  <script src="flutter_bootstrap.js?v=e0ac4cfcda63" async></script>
+  <script src="flutter_bootstrap.js?v=ea63ce7daa70" async></script>
 </body>
 </html>
